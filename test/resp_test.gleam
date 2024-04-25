@@ -14,14 +14,16 @@ pub fn simple_string() {
   "+hello\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
-  |> should.equal(Ok(resp.SimpleString("hello")))
+  |> should.be_ok
+  |> should.equal(resp.SimpleString("hello"))
 }
 
 pub fn empty_array_test() {
   "*0\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
-  |> should.equal(Ok(resp.Array([])))
+  |> should.be_ok
+  |> should.equal(resp.Array([]))
 }
 
 pub fn array_test() {
@@ -31,20 +33,23 @@ pub fn array_test() {
   "*2\r\n+hello\r\n+world\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
-  |> should.equal(Ok(hello_world))
+  |> should.be_ok
+  |> should.equal(hello_world)
 
   // Nested arrays
   "*2\r\n*2\r\n+hello\r\n+world\r\n*2\r\n+hello\r\n+world\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
-  |> should.equal(Ok(resp.Array([hello_world, hello_world])))
+  |> should.be_ok
+  |> should.equal(resp.Array([hello_world, hello_world]))
 }
 
 pub fn ping_command_test() {
   "*1\r\n$4\r\nping\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
-  |> should.equal(Ok(resp.Array([resp.BulkString(<<"ping":utf8>>)])))
+  |> should.be_ok
+  |> should.equal(resp.Array([resp.BulkString(<<"ping":utf8>>)]))
 }
 
 // to_bit_array tests
