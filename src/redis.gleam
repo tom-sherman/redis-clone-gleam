@@ -1,16 +1,19 @@
+import birl
+import birl/duration
 import gleam/bit_array
 import gleam/bytes_builder
 import gleam/erlang/atom
 import gleam/erlang/process
+import gleam/int
 import gleam/io
-import gleam/option.{None}
+import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import glisten.{Packet}
 import redis/ets
 import resp
-
-import glisten.{Packet}
 
 pub fn main() {
   let table = ets.new(atom.create_from_string("redis"))
@@ -54,7 +57,7 @@ fn unwrap_or_else(result, f) {
 type Command {
   Ping
   Echo(BitArray)
-  Set(key: BitArray, value: BitArray)
+  Set(key: BitArray, value: BitArray, px: Option(Int))
   Get(key: BitArray)
 }
 
@@ -90,8 +93,42 @@ fn parse_command(value) {
 
         "SET" ->
           case args {
-            [resp.BulkString(key), resp.BulkString(value)] ->
-              Ok(Set(key, value))
+            [resp.BulkString(key), resp.BulkString(value), ..options] ->
+              case options {
+                [] -> Ok(Set(key, value, px: None))
+
+                [resp.BulkString(maybe_px_option), resp.BulkString(px)] -> {
+                  use px_option <- result.try(
+                    bit_array.to_string(maybe_px_option)
+                    |> result.map_error(fn(_) {
+                      resp.SimpleError("ERR invalid command name")
+                    }),
+                  )
+
+                  use px <- result.try(
+                    px
+                    |> bit_array.to_string
+                    |> result.then(int.parse)
+                    |> result.map_error(fn(_) {
+                      resp.SimpleError("ERR invalid px value")
+                    }),
+                  )
+
+                  case string.uppercase(px_option) {
+                    "PX" -> Ok(Set(key, value, px: Some(px)))
+                    _ ->
+                      Error(resp.SimpleError(
+                        "ERR expected px option for 'set' command",
+                      ))
+                  }
+                }
+
+                _ ->
+                  Error(resp.SimpleError(
+                    "ERR expected px option for 'set' command",
+                  ))
+              }
+
             _ ->
               Error(resp.SimpleError(
                 "ERR wrong number of arguments for 'set' command",
@@ -115,19 +152,41 @@ fn parse_command(value) {
   }
 }
 
+type TableValue {
+  TableValue(content: BitArray, expiry: Option(birl.Time))
+}
+
 fn handle_command(cmd, table) {
   case cmd {
     Ping -> Ok(resp.SimpleString("PONG"))
     Echo(value) -> Ok(resp.BulkString(value))
-    Set(key, value) -> {
-      ets.insert(table, key, value)
+    Set(key, value, px) -> {
+      let expiry =
+        px
+        |> option.map(duration.milli_seconds)
+        |> option.map(birl.add(birl.now(), _))
+
+      ets.insert(table, key, TableValue(content: value, expiry: expiry))
       Ok(resp.SimpleString("OK"))
     }
-    Get(key) ->
+    Get(key) -> {
       Ok(
         ets.lookup(table, key)
-        |> result.map(resp.BulkString)
+        |> result.map(fn(v) {
+          case v.expiry {
+            None -> resp.BulkString(v.content)
+            Some(expiry) ->
+              case birl.compare(expiry, birl.now()) {
+                order.Lt -> {
+                  ets.delete(table, key)
+                  resp.Null
+                }
+                _ -> resp.BulkString(v.content)
+              }
+          }
+        })
         |> result.unwrap(resp.Null),
       )
+    }
   }
 }

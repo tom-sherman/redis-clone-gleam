@@ -52,6 +52,32 @@ pub fn ping_command_test() {
   |> should.equal(resp.Array([resp.BulkString(<<"ping":utf8>>)]))
 }
 
+pub fn integer_test() {
+  ":1234\r\n"
+  |> string_to_bit_array
+  |> resp.from_bit_array
+  |> should.be_ok
+  |> should.equal(resp.Integer(1234))
+
+  ":-1234\r\n"
+  |> string_to_bit_array
+  |> resp.from_bit_array
+  |> should.be_ok
+  |> should.equal(resp.Integer(-1234))
+
+  ":-0\r\n"
+  |> string_to_bit_array
+  |> resp.from_bit_array
+  |> should.be_ok
+  |> should.equal(resp.Integer(0))
+
+  ":+0\r\n"
+  |> string_to_bit_array
+  |> resp.from_bit_array
+  |> should.be_ok
+  |> should.equal(resp.Integer(0))
+}
+
 // to_bit_array tests
 
 pub fn simple_string_to_bit_array_test() {

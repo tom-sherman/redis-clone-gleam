@@ -34,7 +34,7 @@ fn unfold(state, f) {
 
 pub type Value {
   Null
-  Int(Int)
+  Integer(Int)
   BulkString(BitArray)
   Array(List(Value))
   SimpleString(String)
@@ -77,6 +77,7 @@ fn partial_from_bit_array(msg) {
     <<"+":utf8, _:bits>> -> parse_simple_string(msg)
     <<"*":utf8, _:bits>> -> parse_array(msg)
     <<"$":utf8, _:bits>> -> parse_bulk_string(msg)
+    <<":":utf8, _:bits>> -> parse_integer(msg)
     _ ->
       Error(SimpleError(
         "Failed to parse partial message: "
@@ -142,6 +143,15 @@ pub fn to_bit_array(value: Value) -> BitArray {
         ])
       }
 
+    Integer(i) ->
+      bit_array.concat([
+        <<":":utf8>>,
+        i
+          |> int.to_string
+          |> bit_array.from_string,
+        <<"\r\n":utf8>>,
+      ])
+
     Null -> <<"_\r\n":utf8>>
 
     _ -> {
@@ -154,7 +164,7 @@ pub fn to_bit_array(value: Value) -> BitArray {
 pub fn inspect(value: Value) -> String {
   case value {
     Null -> "null"
-    Int(i) -> int.to_string(i)
+    Integer(i) -> int.to_string(i)
     BulkString(b) ->
       "BulkString("
       <> {
@@ -301,4 +311,67 @@ fn parse_bulk_string(input: BitArray) -> Result(#(Value, BitArray), Error) {
     <<"\r\n":utf8, rest:bits>> -> Ok(#(BulkString(data), rest))
     _ -> Error(SimpleError("Failed to parse bulk string CRLF"))
   }
+}
+
+type FirstIntegerByte {
+  Positive
+  Negative
+  Digit(String)
+}
+
+fn parse_integer(input: BitArray) -> Result(#(Value, BitArray), Error) {
+  use rest <- result.try(case input {
+    <<":":utf8, rest:bits>> -> Ok(rest)
+    _ -> Error(SimpleError("Passed a non bulk string"))
+  })
+
+  use #(first, rest) <- result.try(case rest {
+    <<head:bytes-size(1), tail:bits>> -> Ok(#(head, tail))
+    _ -> Error(SimpleError("Failed to parse integer"))
+  })
+
+  use first <- result.try(case first {
+    <<"-":utf8>> -> Ok(Negative)
+    <<"+":utf8>> -> Ok(Positive)
+    <<i>> if i >= 48 && i <= 57 -> {
+      use digit_string <- result.try(
+        string.utf_codepoint(i)
+        |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
+      )
+
+      Ok(Digit(string.from_utf_codepoints([digit_string])))
+    }
+    _ -> Error(SimpleError("Failed to parse integer"))
+  })
+
+  use #(other_digits, rest) <- result.try(
+    split_first(rest, <<"\r\n":utf8>>)
+    |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
+  )
+
+  use value <- result.try(
+    case first {
+      Positive ->
+        other_digits
+        |> bit_array.to_string
+        |> result.then(int.parse)
+        |> result.map(Integer)
+
+      Negative ->
+        other_digits
+        |> bit_array.to_string
+        |> result.then(int.parse)
+        |> result.map(fn(i) { Integer(-i) })
+
+      Digit(d) ->
+        other_digits
+        |> bit_array.to_string
+        |> result.map(string.append(d, _))
+        |> result.then(int.parse)
+        |> result.map(Integer)
+    }
+    |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
+  )
+
+  Ok(#(value, rest))
 }
