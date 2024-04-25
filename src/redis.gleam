@@ -1,18 +1,29 @@
 import gleam/bit_array
 import gleam/bytes_builder
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/io
 import gleam/option.{None}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import redis/ets
 import resp
 
 import glisten.{Packet}
 
+type State {
+  State(table: ets.Set(BitArray, BitArray))
+}
+
 pub fn main() {
   let assert Ok(_) =
-    glisten.handler(fn(_conn) { #(Nil, None) }, handle_message)
+    glisten.handler(
+      fn(_conn) {
+        #(State(table: ets.new(atom.create_from_string("redis"))), None)
+      },
+      handle_message,
+    )
     |> glisten.serve(6379)
 
   process.sleep_forever()
@@ -25,7 +36,7 @@ fn handle_message(msg, state, conn) {
 
   let result = {
     use command <- result.try(parse_command(value))
-    handle_command(command)
+    handle_command(command, state)
   }
 
   let output =
@@ -48,9 +59,12 @@ fn unwrap_or_else(result, f) {
 type Command {
   Ping
   Echo(BitArray)
+  Set(key: BitArray, value: BitArray)
+  Get(key: BitArray)
 }
 
 fn parse_command(value) {
+  io.debug(value)
   case value {
     resp.Array([resp.BulkString(command_name), ..args]) -> {
       use command_name <- result.try(
@@ -78,6 +92,26 @@ fn parse_command(value) {
                 "ERR wrong number of arguments for 'echo' command",
               ))
           }
+
+        "SET" ->
+          case args {
+            [resp.BulkString(key), resp.BulkString(value)] ->
+              Ok(Set(key, value))
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'set' command",
+              ))
+          }
+
+        "GET" ->
+          case args {
+            [resp.BulkString(key)] -> Ok(Get(key))
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'get' command",
+              ))
+          }
+
         _ -> Error(resp.SimpleError("ERR unknown command name"))
       }
     }
@@ -86,9 +120,19 @@ fn parse_command(value) {
   }
 }
 
-fn handle_command(cmd) {
+fn handle_command(cmd, state: State) {
   case cmd {
     Ping -> Ok(resp.SimpleString("PONG"))
     Echo(value) -> Ok(resp.BulkString(value))
+    Set(key, value) -> {
+      ets.insert(state.table, key, value)
+      Ok(resp.SimpleString("OK"))
+    }
+    Get(key) ->
+      Ok(
+        ets.lookup(state.table, key)
+        |> result.map(resp.BulkString)
+        |> result.unwrap(resp.Null),
+      )
   }
 }

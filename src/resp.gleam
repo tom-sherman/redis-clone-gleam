@@ -141,6 +141,9 @@ pub fn to_bit_array(value: Value) -> BitArray {
           values,
         ])
       }
+
+    Null -> <<"_\r\n":utf8>>
+
     _ -> {
       io.debug("Failed to convert value to string: " <> inspect(value))
       panic
