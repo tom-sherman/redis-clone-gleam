@@ -1,8 +1,12 @@
+import gleam/bit_array
 import gleam/bytes_builder
 import gleam/erlang/process
-import gleam/list
+import gleam/io
 import gleam/option.{None}
 import gleam/otp/actor
+import gleam/result
+import gleam/string
+import resp
 
 import glisten.{Packet}
 
@@ -17,38 +21,74 @@ pub fn main() {
 fn handle_message(msg, state, conn) {
   let assert Packet(msg) = msg
 
-  let output =
-    parse_message(msg)
-    |> list.map(handle_command)
-    |> list.fold("", fn(acc, cmd) { acc <> cmd <> "\r\n" })
+  let assert Ok(value) = resp.from_bit_array(msg)
 
-  let assert Ok(_) = glisten.send(conn, bytes_builder.from_string(output))
+  let result = {
+    use command <- result.try(parse_command(value))
+    handle_command(command)
+  }
+
+  let output =
+    result
+    |> result.map(resp.to_bit_array)
+    |> unwrap_or_else(fn(error) { resp.error_to_bit_array(error) })
+
+  let assert Ok(_) = glisten.send(conn, bytes_builder.from_bit_array(output))
 
   actor.continue(state)
 }
 
-type Command {
-  Ping
-}
-
-fn handle_command(cmd) -> String {
-  case cmd {
-    Ping -> "+PONG"
+fn unwrap_or_else(result, f) {
+  case result {
+    Ok(value) -> value
+    Error(error) -> f(error)
   }
 }
 
-fn parse_message(_msg: BitArray) -> List(Command) {
-  [Ping]
-  // let assert Ok(str) = bit_array.to_string(msg)
+type Command {
+  Ping
+  Echo(BitArray)
+}
 
-  // str
-  // |> string.trim
-  // |> string.split("\n")
-  // |> list.map(fn(line) {
-  //   io.debug("line: " <> line)
-  //   case line {
-  //     "PING" -> Ping
-  //     _ -> panic
-  //   }
-  // })
+fn parse_command(value) {
+  case value {
+    resp.Array([resp.BulkString(command_name), ..args]) -> {
+      use command_name <- result.try(
+        bit_array.to_string(command_name)
+        |> result.map_error(fn(_) {
+          resp.SimpleError("ERR invalid command name")
+        }),
+      )
+
+      case string.uppercase(command_name) {
+        "PING" ->
+          case args {
+            [] -> Ok(Ping)
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'ping' command",
+              ))
+          }
+
+        "ECHO" ->
+          case args {
+            [resp.BulkString(value)] -> Ok(Echo(value))
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'echo' command",
+              ))
+          }
+        _ -> Error(resp.SimpleError("ERR unknown command name"))
+      }
+    }
+
+    _ -> Error(resp.SimpleError("ERR unknown command"))
+  }
+}
+
+fn handle_command(cmd) {
+  case cmd {
+    Ping -> Ok(resp.SimpleString("PONG"))
+    Echo(value) -> Ok(resp.BulkString(value))
+  }
 }
