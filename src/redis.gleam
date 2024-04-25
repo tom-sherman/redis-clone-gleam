@@ -12,31 +12,26 @@ import resp
 
 import glisten.{Packet}
 
-type State {
-  State(table: ets.Set(BitArray, BitArray))
-}
-
 pub fn main() {
+  let table = ets.new(atom.create_from_string("redis"))
+
   let assert Ok(_) =
-    glisten.handler(
-      fn(_conn) {
-        #(State(table: ets.new(atom.create_from_string("redis"))), None)
-      },
-      handle_message,
-    )
+    glisten.handler(fn(_conn) { #(Nil, None) }, fn(msg, state, conn) {
+      handle_message(msg, state, conn, table)
+    })
     |> glisten.serve(6379)
 
   process.sleep_forever()
 }
 
-fn handle_message(msg, state, conn) {
+fn handle_message(msg, state, conn, table) {
   let assert Packet(msg) = msg
 
   let assert Ok(value) = resp.from_bit_array(msg)
 
   let result = {
     use command <- result.try(parse_command(value))
-    handle_command(command, state)
+    handle_command(command, table)
   }
 
   let output =
@@ -120,17 +115,17 @@ fn parse_command(value) {
   }
 }
 
-fn handle_command(cmd, state: State) {
+fn handle_command(cmd, table) {
   case cmd {
     Ping -> Ok(resp.SimpleString("PONG"))
     Echo(value) -> Ok(resp.BulkString(value))
     Set(key, value) -> {
-      ets.insert(state.table, key, value)
+      ets.insert(table, key, value)
       Ok(resp.SimpleString("OK"))
     }
     Get(key) ->
       Ok(
-        ets.lookup(state.table, key)
+        ets.lookup(table, key)
         |> result.map(resp.BulkString)
         |> result.unwrap(resp.Null),
       )
