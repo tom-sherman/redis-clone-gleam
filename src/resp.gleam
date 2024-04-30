@@ -248,7 +248,7 @@ fn parse_array(input: BitArray) -> Result(#(Value, BitArray), Error) {
   use #(values, rest) <- result.try(
     fold_until_error(
       over: list.repeat(Nil, length),
-      from: Ok(#([], rest)),
+      from: #([], rest),
       with: fn(state, _) {
         let #(values, rest) = state
         use #(value, rest) <- result.try(partial_from_bit_array(rest))
@@ -346,7 +346,7 @@ fn parse_map(input: BitArray) -> Result(#(Value, BitArray), Error) {
   use #(entries, rest) <- result.try(
     fold_until_error(
       over: list.repeat(Nil, length),
-      from: Ok(#([], rest)),
+      from: #([], rest),
       with: fn(state, _) {
         let #(entries, rest) = state
 
@@ -371,20 +371,15 @@ fn parse_map(input: BitArray) -> Result(#(Value, BitArray), Error) {
 /// Fold over a list of values, accumulating a result, until the end of the list or an error is encountered.
 fn fold_until_error(
   over collection: List(a),
-  from accumulator: Result(b, e),
+  from accumulator: b,
   with fun: fn(b, a) -> Result(b, e),
 ) -> Result(b, e) {
-  case accumulator {
-    Ok(acc) ->
-      case collection {
-        [] -> Ok(acc)
-        [first, ..rest] ->
-          case fun(acc, first) {
-            Ok(next_accumulator) ->
-              fold_until_error(rest, Ok(next_accumulator), fun)
-            Error(b) -> Error(b)
-          }
+  case collection {
+    [] -> Ok(accumulator)
+    [first, ..rest] ->
+      case fun(accumulator, first) {
+        Ok(next_accumulator) -> fold_until_error(rest, next_accumulator, fun)
+        Error(b) -> Error(b)
       }
-    Error(e) -> Error(e)
   }
 }
