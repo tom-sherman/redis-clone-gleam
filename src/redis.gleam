@@ -16,8 +16,15 @@ import glisten.{Packet}
 import redis/ets
 import resp
 
+type Context {
+  Context(table: ets.Set(BitArray, TableValue))
+}
+
+type State {
+  Default(ctx: Context)
+}
+
 pub fn main() {
-  let table = ets.new(atom.create_from_string("redis"))
   let port =
     case argv.load().arguments {
       ["--port", port] -> port
@@ -26,23 +33,24 @@ pub fn main() {
     |> int.parse
     |> result.unwrap(6379)
 
+  let initial_state =
+    Default(Context(table: ets.new(atom.create_from_string("redis"))))
+
   let assert Ok(_) =
-    glisten.handler(fn(_conn) { #(Nil, None) }, fn(msg, state, conn) {
-      handle_message(msg, state, conn, table)
-    })
+    glisten.handler(fn(_conn) { #(initial_state, None) }, handle_message)
     |> glisten.serve(port)
 
   process.sleep_forever()
 }
 
-fn handle_message(msg, state, conn, table) {
+fn handle_message(msg, state: State, conn) {
   let assert Packet(msg) = msg
 
   let assert Ok(value) = resp.from_bit_array(msg)
 
   let result = {
     use command <- result.try(parse_command(value))
-    handle_command(command, table)
+    handle_command(command, state.ctx)
   }
 
   let output =
@@ -188,7 +196,7 @@ type TableValue {
   TableValue(content: BitArray, expiry: Option(birl.Time))
 }
 
-fn handle_command(cmd, table) {
+fn handle_command(cmd, ctx: Context) {
   case cmd {
     Ping -> Ok(resp.SimpleString("PONG"))
     Echo(value) -> Ok(resp.BulkString(value))
@@ -198,19 +206,19 @@ fn handle_command(cmd, table) {
         |> option.map(duration.milli_seconds)
         |> option.map(birl.add(birl.now(), _))
 
-      ets.insert(table, key, TableValue(content: value, expiry: expiry))
+      ets.insert(ctx.table, key, TableValue(content: value, expiry: expiry))
       Ok(resp.SimpleString("OK"))
     }
     Get(key) -> {
       Ok(
-        ets.lookup(table, key)
+        ets.lookup(ctx.table, key)
         |> result.map(fn(v) {
           case v.expiry {
             None -> resp.BulkString(v.content)
             Some(expiry) ->
               case birl.compare(expiry, birl.now()) {
                 order.Lt -> {
-                  ets.delete(table, key)
+                  ets.delete(ctx.table, key)
                   resp.Null
                 }
                 _ -> resp.BulkString(v.content)
