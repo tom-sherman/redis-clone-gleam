@@ -240,29 +240,24 @@ fn parse_array(input: BitArray) -> Result(#(Value, BitArray), Error) {
     |> result.map_error(fn(_) { SimpleError("Failed to parse array length") }),
   )
 
-  case length {
-    0 -> Ok(#(Array([]), rest))
-    non_zero_length -> {
-      use #(values, rest) <- result.try(
-        list.fold_until(
-          over: list.range(0, non_zero_length - 1),
-          from: Ok(#([], rest)),
-          with: fn(state, _) {
-            // Will always be Ok because we stop whenever we receive an error
-            let assert Ok(#(values, rest)) = state
+  use #(values, rest) <- result.try(
+    list.fold_until(
+      over: list.repeat(Nil, length),
+      from: Ok(#([], rest)),
+      with: fn(state, _) {
+        // Will always be Ok because we stop whenever we receive an error
+        let assert Ok(#(values, rest)) = state
 
-            case partial_from_bit_array(rest) {
-              Ok(#(value, rest)) ->
-                list.Continue(Ok(#(list.append(values, [value]), rest)))
-              Error(e) -> list.Stop(Error(e))
-            }
-          },
-        ),
-      )
+        case partial_from_bit_array(rest) {
+          Ok(#(value, rest)) ->
+            list.Continue(Ok(#(list.append(values, [value]), rest)))
+          Error(e) -> list.Stop(Error(e))
+        }
+      },
+    ),
+  )
 
-      Ok(#(Array(values), rest))
-    }
-  }
+  Ok(#(Array(values), rest))
 }
 
 fn parse_bulk_string(input: BitArray) -> Result(#(Value, BitArray), Error) {
