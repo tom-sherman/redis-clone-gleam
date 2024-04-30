@@ -1,3 +1,4 @@
+import argv
 import birl
 import birl/duration
 import gleam/bit_array
@@ -17,12 +18,19 @@ import resp
 
 pub fn main() {
   let table = ets.new(atom.create_from_string("redis"))
+  let port =
+    case argv.load().arguments {
+      ["--port", port] -> port
+      _ -> "6379"
+    }
+    |> int.parse
+    |> result.unwrap(6379)
 
   let assert Ok(_) =
     glisten.handler(fn(_conn) { #(Nil, None) }, fn(msg, state, conn) {
       handle_message(msg, state, conn, table)
     })
-    |> glisten.serve(6379)
+    |> glisten.serve(port)
 
   process.sleep_forever()
 }
