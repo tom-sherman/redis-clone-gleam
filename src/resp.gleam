@@ -29,7 +29,6 @@ pub type Value {
   BulkString(BitArray)
   Array(List(Value))
   SimpleString(String)
-  Okay
   Map(dict.Dict(Value, Value))
   Set(set.Set(Value))
   Double(Float)
@@ -177,7 +176,6 @@ pub fn inspect(value: Value) -> String {
       |> string.concat
       <> ")"
     SimpleString(s) -> "SimpleString(" <> s <> ")"
-    Okay -> "Okay"
     Map(m) ->
       "Map("
       <> m
