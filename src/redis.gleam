@@ -67,6 +67,7 @@ type Command {
   Echo(BitArray)
   Set(key: BitArray, value: BitArray, px: Option(Int))
   Get(key: BitArray)
+  Info(section: String)
 }
 
 fn parse_command(value) {
@@ -152,7 +153,30 @@ fn parse_command(value) {
               ))
           }
 
-        _ -> Error(resp.SimpleError("ERR unknown command name"))
+        "INFO" ->
+          case args {
+            // Ignore section for now
+            [] -> Ok(Info("all"))
+            [resp.BulkString(section_bits)] -> {
+              use section <- result.try(
+                bit_array.to_string(section_bits)
+                |> result.map_error(fn(_) {
+                  resp.SimpleError("ERR invalid section")
+                }),
+              )
+
+              Ok(Info(section))
+            }
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'info' command",
+              ))
+          }
+
+        _ ->
+          Error(resp.SimpleError(
+            "ERR unknown command name: " <> string.uppercase(command_name),
+          ))
       }
     }
 
@@ -196,5 +220,9 @@ fn handle_command(cmd, table) {
         |> result.unwrap(resp.Null),
       )
     }
+
+    Info("all") | Info("replication") ->
+      Ok(resp.BulkString(<<"role:master":utf8>>))
+    Info(_) -> Ok(resp.BulkString(<<>>))
   }
 }
