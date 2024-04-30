@@ -368,6 +368,7 @@ fn parse_map(input: BitArray) -> Result(#(Value, BitArray), Error) {
   Ok(#(Map(dict.from_list(entries)), rest))
 }
 
+/// Fold over a list of values, accumulating a result, until the end of the list or an error is encountered.
 fn fold_until_error(
   over collection: List(a),
   from accumulator: Result(b, e),
