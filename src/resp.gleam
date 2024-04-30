@@ -246,18 +246,13 @@ fn parse_array(input: BitArray) -> Result(#(Value, BitArray), Error) {
   )
 
   use #(values, rest) <- result.try(
-    list.fold_until(
+    fold_until_error(
       over: list.repeat(Nil, length),
       from: Ok(#([], rest)),
       with: fn(state, _) {
-        // Will always be Ok because we stop whenever we receive an error
-        let assert Ok(#(values, rest)) = state
-
-        case partial_from_bit_array(rest) {
-          Ok(#(value, rest)) ->
-            list.Continue(Ok(#(list.append(values, [value]), rest)))
-          Error(e) -> list.Stop(Error(e))
-        }
+        let #(values, rest) = state
+        use #(value, rest) <- result.try(partial_from_bit_array(rest))
+        Ok(#(list.append(values, [value]), rest))
       },
     ),
   )
