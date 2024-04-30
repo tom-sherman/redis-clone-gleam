@@ -291,65 +291,34 @@ fn parse_bulk_string(input: BitArray) -> Result(#(Value, BitArray), Error) {
   }
 }
 
-type FirstIntegerByte {
-  Positive
-  Negative
-  Digit(String)
-}
-
 fn parse_integer(input: BitArray) -> Result(#(Value, BitArray), Error) {
   use rest <- result.try(case input {
     <<":":utf8, rest:bits>> -> Ok(rest)
     _ -> Error(SimpleError("Passed a non bulk string"))
   })
 
-  use #(first, rest) <- result.try(case rest {
-    <<head:bytes-size(1), tail:bits>> -> Ok(#(head, tail))
-    _ -> Error(SimpleError("Failed to parse integer"))
-  })
-
-  use first <- result.try(case first {
-    <<"-":utf8>> -> Ok(Negative)
-    <<"+":utf8>> -> Ok(Positive)
-    <<i>> if i >= 48 && i <= 57 -> {
-      use digit_string <- result.try(
-        string.utf_codepoint(i)
-        |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
-      )
-
-      Ok(Digit(string.from_utf_codepoints([digit_string])))
-    }
-    _ -> Error(SimpleError("Failed to parse integer"))
-  })
-
-  use #(other_digits, rest) <- result.try(
+  use #(bits, rest) <- result.try(
     split_first(rest, <<"\r\n":utf8>>)
     |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
   )
 
-  use value <- result.try(
-    case first {
-      Positive ->
-        other_digits
-        |> bit_array.to_string
-        |> result.then(int.parse)
-        |> result.map(Integer)
+  use s <- result.try(
+    bits
+    |> bit_array.to_string
+    |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
+  )
 
-      Negative ->
-        other_digits
-        |> bit_array.to_string
-        |> result.then(int.parse)
-        |> result.map(fn(i) { Integer(-i) })
+  use n <- result.try(
+    case s {
+      "-" <> digits ->
+        digits
+        |> int.parse
+        |> result.map(int.negate)
 
-      Digit(d) ->
-        other_digits
-        |> bit_array.to_string
-        |> result.map(string.append(d, _))
-        |> result.then(int.parse)
-        |> result.map(Integer)
+      "+" <> digits | digits -> int.parse(digits)
     }
     |> result.map_error(fn(_) { SimpleError("Failed to parse integer") }),
   )
 
-  Ok(#(value, rest))
+  Ok(#(Integer(n), rest))
 }
