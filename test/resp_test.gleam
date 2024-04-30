@@ -1,3 +1,4 @@
+import gleam/dict
 import gleeunit
 import gleeunit/should
 import resp
@@ -76,6 +77,20 @@ pub fn integer_test() {
   |> resp.from_bit_array
   |> should.be_ok
   |> should.equal(resp.Integer(0))
+}
+
+pub fn map_test() {
+  "%2\r\n+first\r\n:1\r\n:2\r\n+second\r\n"
+  |> string_to_bit_array
+  |> resp.from_bit_array
+  |> should.be_ok
+  |> should.equal(resp.Map(
+    [
+      #(resp.SimpleString("first"), resp.Integer(1)),
+      #(resp.Integer(2), resp.SimpleString("second")),
+    ]
+    |> dict.from_list,
+  ))
 }
 
 // to_bit_array tests

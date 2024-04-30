@@ -68,9 +68,10 @@ fn partial_from_bit_array(msg) {
     <<"*":utf8, _:bits>> -> parse_array(msg)
     <<"$":utf8, _:bits>> -> parse_bulk_string(msg)
     <<":":utf8, _:bits>> -> parse_integer(msg)
+    <<"%":utf8, _:bits>> -> parse_map(msg)
     _ ->
       Error(SimpleError(
-        "Failed to parse partial message: "
+        "Unknown type: "
         <> {
           msg
           |> bit_array.to_string
@@ -325,4 +326,69 @@ fn parse_integer(input: BitArray) -> Result(#(Value, BitArray), Error) {
   )
 
   Ok(#(Integer(n), rest))
+}
+
+fn parse_map(input: BitArray) -> Result(#(Value, BitArray), Error) {
+  use rest <- result.try(case input {
+    <<"%":utf8, rest:bits>> -> Ok(rest)
+    _ -> Error(SimpleError("Passed a non map"))
+  })
+
+  use #(length, rest) <- result.try(
+    rest
+    |> split_first(<<"\r\n":utf8>>)
+    |> result.map_error(fn(_) { SimpleError("Failed to parse map length") }),
+  )
+
+  use length <- result.try(
+    length
+    |> bit_array.to_string
+    |> result.map(int.parse)
+    |> result.flatten
+    |> result.map_error(fn(_) { SimpleError("Failed to parse map length") }),
+  )
+
+  use #(entries, rest) <- result.try(
+    fold_until_error(
+      over: list.repeat(Nil, length),
+      from: Ok(#([], rest)),
+      with: fn(state, _) {
+        let #(entries, rest) = state
+
+        use #(key, rest) <- result.try(
+          partial_from_bit_array(rest)
+          |> result.map_error(fn(_) { SimpleError("Failed to parse map key") }),
+        )
+
+        use #(value, rest) <- result.try(
+          partial_from_bit_array(rest)
+          |> result.map_error(fn(_) { SimpleError("Failed to parse map value") }),
+        )
+
+        Ok(#(list.append(entries, [#(key, value)]), rest))
+      },
+    ),
+  )
+
+  Ok(#(Map(dict.from_list(entries)), rest))
+}
+
+fn fold_until_error(
+  over collection: List(a),
+  from accumulator: Result(b, e),
+  with fun: fn(b, a) -> Result(b, e),
+) -> Result(b, e) {
+  case accumulator {
+    Ok(acc) ->
+      case collection {
+        [] -> Ok(acc)
+        [first, ..rest] ->
+          case fun(acc, first) {
+            Ok(next_accumulator) ->
+              fold_until_error(rest, Ok(next_accumulator), fun)
+            Error(b) -> Error(b)
+          }
+      }
+    Error(e) -> Error(e)
+  }
 }
