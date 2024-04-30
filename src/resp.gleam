@@ -35,7 +35,7 @@ pub type Value {
   Double(Float)
   Boolean(Bool)
   BigNumber(Int)
-  // TODO: Push
+  Push(List(Value))
 }
 
 pub type Error {
@@ -165,6 +165,12 @@ pub fn inspect(value: Value) -> String {
       }
       <> ")"
     Array(a) ->
+      "Array("
+      <> a
+      |> list.flat_map(fn(v) { [inspect(v), ", "] })
+      |> string.concat
+      <> ")"
+    Push(a) ->
       "Array("
       <> a
       |> list.flat_map(fn(v) { [inspect(v), ", "] })
