@@ -5,8 +5,6 @@ import gleam/float
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{None, Some}
-import gleam/pair
 import gleam/result
 import gleam/set
 import gleam/string
@@ -22,13 +20,6 @@ fn split_first(
   case erl_binary_split(arr, delimiter) {
     [head, tail] -> Ok(#(head, tail))
     _ -> Error(Nil)
-  }
-}
-
-fn unfold(state, f) {
-  case f(state) {
-    None -> []
-    Some(#(x, new_state)) -> list.append([x], unfold(new_state, f))
   }
 }
 
@@ -251,31 +242,22 @@ fn parse_array(input: BitArray) -> Result(#(Value, BitArray), Error) {
 
   case length {
     0 -> Ok(#(Array([]), rest))
-    _ -> {
-      // This unfold nonsense is annoying. Surely there's a better way to do this?
-      let frames =
-        unfold(#(length, rest), fn(state) {
-          case state {
-            #(0, _) -> None
-            #(i, array) ->
-              case partial_from_bit_array(array) {
-                Ok(#(value, rest)) ->
-                  Some(#(#(Ok(value), rest), #(i - 1, rest)))
-                Error(e) -> Some(#(#(Error(e), rest), #(0, rest)))
-              }
-          }
-        })
+    non_zero_length -> {
+      use #(values, rest) <- result.try(
+        list.fold_until(
+          over: list.range(0, non_zero_length - 1),
+          from: Ok(#([], rest)),
+          with: fn(state, _) {
+            // Will always be Ok because we stop whenever we receive an error
+            let assert Ok(#(values, rest)) = state
 
-      use #(_, rest) <- result.try(
-        frames
-        |> list.last
-        |> result.map_error(fn(_) { SimpleError("Failed to parse array") }),
-      )
-
-      use values <- result.try(
-        frames
-        |> list.map(pair.first)
-        |> result.all,
+            case partial_from_bit_array(rest) {
+              Ok(#(value, rest)) ->
+                list.Continue(Ok(#(list.append(values, [value]), rest)))
+              Error(e) -> list.Stop(Error(e))
+            }
+          },
+        ),
       )
 
       Ok(#(Array(values), rest))
