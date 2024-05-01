@@ -13,6 +13,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import glisten.{Packet}
+import mug
 import redis/ets
 import resp
 
@@ -64,11 +65,31 @@ type State {
 pub fn main() {
   let assert Ok(args) = arg_parser()
 
-  let initial_state =
-    Default(Context(
-      table: ets.new(atom.create_from_string("redis")),
-      role: args.role,
-    ))
+  let ctx =
+    Context(table: ets.new(atom.create_from_string("redis")), role: args.role)
+
+  let initial_state = case args.role {
+    Master(_, _) -> Default(ctx)
+
+    ReplicaOf(host, port) -> {
+      // Replication handshake
+      let assert Ok(socket) =
+        mug.new(host, port)
+        |> mug.connect()
+
+      let assert Ok(_) =
+        resp.Array([resp.BulkString(<<"PING":utf8>>)])
+        |> resp.to_bit_array
+        |> mug.send(socket, _)
+
+      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
+      let assert Ok(resp.SimpleString("PONG")) =
+        packet
+        |> resp.from_bit_array
+
+      Default(ctx)
+    }
+  }
 
   let assert Ok(_) =
     glisten.handler(fn(_conn) { #(initial_state, None) }, handle_message)
