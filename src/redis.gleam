@@ -2,6 +2,7 @@ import argv
 import birl
 import birl/duration
 import gleam/bit_array
+import gleam/bool.{guard}
 import gleam/bytes_builder
 import gleam/erlang/atom
 import gleam/erlang/process
@@ -11,11 +12,11 @@ import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/otp/actor
 import gleam/result
-import gleam/string
 import glisten.{Packet}
 import mug
+import redis/command
 import redis/ets
-import resp
+import redis/resp
 
 type Role {
   ReplicaOf(host: String, port: Int)
@@ -71,61 +72,13 @@ pub fn main() {
   let initial_state = case args.role {
     Master(_, _) -> Default(ctx)
 
-    ReplicaOf(master_host, master_port) -> {
-      // Replication handshake
-
-      let assert Ok(socket) =
-        mug.new(master_host, master_port)
-        |> mug.connect()
-      io.println("Connected to master")
-
+    ReplicaOf(host, port) -> {
       let assert Ok(_) =
-        resp.Array([resp.BulkString(<<"PING":utf8>>)])
-        |> resp.to_bit_array
-        |> mug.send(socket, _)
-      io.println("Sent PING")
-
-      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
-      let assert Ok(resp.SimpleString("PONG")) =
-        packet
-        |> resp.from_bit_array
-      io.println("Received PONG")
-
-      let assert Ok(_) =
-        resp.Array([
-          resp.BulkString(<<"REPLCONF":utf8>>),
-          resp.BulkString(<<"listening-port":utf8>>),
-          resp.BulkString(
-            args.port
-            |> int.to_string
-            |> bit_array.from_string,
-          ),
-        ])
-        |> resp.to_bit_array
-        |> mug.send(socket, _)
-      io.println("Sent REPLCONF listening-port")
-
-      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
-      let assert Ok(resp.SimpleString("OK")) =
-        packet
-        |> resp.from_bit_array
-      io.println("Received first OK")
-
-      let assert Ok(_) =
-        resp.Array([
-          resp.BulkString(<<"REPLCONF":utf8>>),
-          resp.BulkString(<<"capa":utf8>>),
-          resp.BulkString(<<"psync2":utf8>>),
-        ])
-        |> resp.to_bit_array
-        |> mug.send(socket, _)
-      io.println("Sent REPLCONF capa")
-
-      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
-      let assert Ok(resp.SimpleString("OK")) =
-        packet
-        |> resp.from_bit_array
-      io.println("Received second OK")
+        replication_handshake(
+          master_host: host,
+          master_port: port,
+          port: args.port,
+        )
 
       Default(ctx)
     }
@@ -143,13 +96,79 @@ pub fn main() {
   process.sleep_forever()
 }
 
+fn replication_handshake(
+  master_host master_host,
+  master_port master_port,
+  port port,
+) -> Result(Nil, Nil) {
+  use socket <- result.try(
+    mug.new(master_host, master_port)
+    |> mug.connect()
+    |> result.nil_error,
+  )
+
+  use response <- result.try(
+    resp.Array([resp.BulkString(<<"PING":utf8>>)])
+    |> fetch_value(socket),
+  )
+
+  use <- guard(when: response != resp.SimpleString("PONG"), return: Error(Nil))
+
+  use response <- result.try(
+    resp.Array([
+      resp.BulkString(<<"REPLCONF":utf8>>),
+      resp.BulkString(<<"listening-port":utf8>>),
+      resp.BulkString(
+        port
+        |> int.to_string
+        |> bit_array.from_string,
+      ),
+    ])
+    |> fetch_value(socket),
+  )
+
+  use <- guard(when: response != resp.SimpleString("OK"), return: Error(Nil))
+
+  use response <- result.try(
+    resp.Array([
+      resp.BulkString(<<"REPLCONF":utf8>>),
+      resp.BulkString(<<"capa":utf8>>),
+      resp.BulkString(<<"psync2":utf8>>),
+    ])
+    |> fetch_value(socket),
+  )
+
+  use <- guard(when: response != resp.SimpleString("OK"), return: Error(Nil))
+
+  Ok(Nil)
+}
+
+fn fetch_value(value, socket) {
+  use _ <- result.try(
+    value
+    |> resp.to_bit_array
+    |> mug.send(socket, _)
+    |> result.nil_error,
+  )
+
+  use packet <- result.try(
+    mug.receive(socket, timeout_milliseconds: 500)
+    |> result.nil_error,
+  )
+
+  resp.from_bit_array(packet)
+  |> result.nil_error
+}
+
 fn handle_message(msg, state: State, conn) {
   let assert Packet(msg) = msg
 
   let assert Ok(value) = resp.from_bit_array(msg)
 
+  io.debug(value)
+
   let result = {
-    use command <- result.try(parse_command(value))
+    use command <- result.try(command.parse_command(value))
     handle_command(command, state.ctx)
   }
 
@@ -170,172 +189,17 @@ fn unwrap_or_else(result, f) {
   }
 }
 
-type ReplconfArgs {
-  ListeningPort(Int)
-  Capa(String)
-}
-
-type Command {
-  Ping
-  Echo(BitArray)
-  Set(key: BitArray, value: BitArray, px: Option(Int))
-  Get(key: BitArray)
-  Info(section: String)
-  Replconf(args: ReplconfArgs)
-}
-
-fn parse_command(value) {
-  io.debug(value)
-  case value {
-    resp.Array([resp.BulkString(command_name), ..args]) -> {
-      use command_name <- result.try(
-        bit_array.to_string(command_name)
-        |> result.map_error(fn(_) {
-          resp.SimpleError("ERR invalid command name")
-        }),
-      )
-
-      case string.uppercase(command_name) {
-        "PING" ->
-          case args {
-            [] -> Ok(Ping)
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'ping' command",
-              ))
-          }
-
-        "ECHO" ->
-          case args {
-            [resp.BulkString(value)] -> Ok(Echo(value))
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'echo' command",
-              ))
-          }
-
-        "SET" ->
-          case args {
-            [resp.BulkString(key), resp.BulkString(value), ..options] ->
-              case options {
-                [] -> Ok(Set(key, value, px: None))
-
-                [resp.BulkString(maybe_px_option), resp.BulkString(px)] -> {
-                  use px_option <- result.try(
-                    bit_array.to_string(maybe_px_option)
-                    |> result.map_error(fn(_) {
-                      resp.SimpleError("ERR invalid command name")
-                    }),
-                  )
-
-                  use px <- result.try(
-                    px
-                    |> bit_array.to_string
-                    |> result.then(int.parse)
-                    |> result.map_error(fn(_) {
-                      resp.SimpleError("ERR invalid px value")
-                    }),
-                  )
-
-                  case string.uppercase(px_option) {
-                    "PX" -> Ok(Set(key, value, px: Some(px)))
-                    _ ->
-                      Error(resp.SimpleError(
-                        "ERR expected px option for 'set' command",
-                      ))
-                  }
-                }
-
-                _ ->
-                  Error(resp.SimpleError(
-                    "ERR expected px option for 'set' command",
-                  ))
-              }
-
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'set' command",
-              ))
-          }
-
-        "GET" ->
-          case args {
-            [resp.BulkString(key)] -> Ok(Get(key))
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'get' command",
-              ))
-          }
-
-        "INFO" ->
-          case args {
-            // Ignore section for now
-            [] -> Ok(Info("all"))
-            [resp.BulkString(section_bits)] -> {
-              use section <- result.try(
-                bit_array.to_string(section_bits)
-                |> result.map_error(fn(_) {
-                  resp.SimpleError("ERR invalid section")
-                }),
-              )
-
-              Ok(Info(section))
-            }
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'info' command",
-              ))
-          }
-
-        "REPLCONF" ->
-          case args {
-            [resp.BulkString(arg1), resp.BulkString(arg2)] ->
-              {
-                use arg1 <- result.try(bit_array.to_string(arg1))
-                use arg2 <- result.try(bit_array.to_string(arg2))
-                case arg1 {
-                  "listening-port" -> {
-                    use port <- result.try(int.parse(arg2))
-                    Ok(Replconf(ListeningPort(port)))
-                  }
-
-                  "capa" -> Ok(Replconf(Capa(arg2)))
-
-                  _ -> Error(Nil)
-                }
-              }
-              |> result.map_error(fn(_) {
-                resp.SimpleError("ERR invalid argument")
-              })
-
-            _ ->
-              Error(resp.SimpleError(
-                "ERR wrong number of arguments for 'replconf' command",
-              ))
-          }
-
-        _ ->
-          Error(resp.SimpleError(
-            "ERR unknown command name: " <> string.uppercase(command_name),
-          ))
-      }
-    }
-
-    _ -> Error(resp.SimpleError("ERR unknown command"))
-  }
-}
-
 type TableValue {
   TableValue(content: BitArray, expiry: Option(birl.Time))
 }
 
 fn handle_command(cmd, ctx: Context) {
   case cmd {
-    Ping -> Ok(resp.SimpleString("PONG"))
+    command.Ping -> Ok(resp.SimpleString("PONG"))
 
-    Echo(value) -> Ok(resp.BulkString(value))
+    command.Echo(value) -> Ok(resp.BulkString(value))
 
-    Set(key, value, px) -> {
+    command.Set(key, value, px) -> {
       let expiry =
         px
         |> option.map(duration.milli_seconds)
@@ -345,7 +209,7 @@ fn handle_command(cmd, ctx: Context) {
       Ok(resp.SimpleString("OK"))
     }
 
-    Get(key) -> {
+    command.Get(key) -> {
       Ok(
         ets.lookup(ctx.table, key)
         |> result.map(fn(v) {
@@ -365,7 +229,7 @@ fn handle_command(cmd, ctx: Context) {
       )
     }
 
-    Info("all") | Info("replication") ->
+    command.Info("all") | command.Info("replication") ->
       Ok(
         resp.BulkString(case ctx.role {
           ReplicaOf(_, _) -> <<"role:slave":utf8>>
@@ -381,12 +245,12 @@ fn handle_command(cmd, ctx: Context) {
             )
         }),
       )
-    Info(_) -> Ok(resp.BulkString(<<>>))
+    command.Info(_) -> Ok(resp.BulkString(<<>>))
 
-    Replconf(args) ->
+    command.Replconf(args) ->
       case args {
-        ListeningPort(_) -> Ok(resp.SimpleString("OK"))
-        Capa(_) -> Ok(resp.SimpleString("OK"))
+        command.ListeningPort(_) -> Ok(resp.SimpleString("OK"))
+        command.Capa(_) -> Ok(resp.SimpleString("OK"))
       }
   }
 }

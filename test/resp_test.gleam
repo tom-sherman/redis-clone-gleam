@@ -1,7 +1,7 @@
 import gleam/dict
 import gleeunit
 import gleeunit/should
-import resp
+import redis/resp
 
 pub fn main() {
   gleeunit.main()
@@ -11,7 +11,7 @@ fn string_to_bit_array(s) {
   <<s:utf8>>
 }
 
-pub fn simple_string() {
+pub fn simple_string_test() {
   "+hello\r\n"
   |> string_to_bit_array
   |> resp.from_bit_array
