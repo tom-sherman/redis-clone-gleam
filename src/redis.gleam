@@ -73,12 +73,16 @@ pub fn main() {
     Master(_, _) -> Default(ctx)
 
     ReplicaOf(host, port) -> {
-      let assert Ok(_) =
+      case
         replication_handshake(
           master_host: host,
           master_port: port,
           port: args.port,
         )
+      {
+        Ok(_) -> Nil
+        Error(_) -> panic as "Failed to handshake with master"
+      }
 
       Default(ctx)
     }
