@@ -15,35 +15,40 @@ import gleam/string
 import glisten.{Packet}
 import redis/ets
 import resp
-import sheen
-import sheen/named
 
-type Args {
-  Args(port: Option(Int))
+type Role {
+  ReplicaOf(host: String, port: Int)
+  Master
 }
 
-fn arg_parser() -> sheen.Parser(Args) {
-  let assert Ok(parser) =
-    sheen.new()
-    |> sheen.name("redis-gleam")
-    |> sheen.build({
-      use port <-
-        named.new("port")
-        |> named.integer()
-        |> named.optional()
+type Args {
+  Args(port: Int, role: Role)
+}
 
-      sheen.return({
-        use port <- port
+fn arg_parser() -> Result(Args, Nil) {
+  arg_parser_loop(argv.load().arguments, Args(port: 6379, role: Master))
+}
 
-        sheen.valid(Args(port: port))
+fn arg_parser_loop(args: List(String), props: Args) -> Result(Args, Nil) {
+  case args {
+    ["--port", port_value, ..rest] | ["-p", port_value, ..rest] -> {
+      int.parse(port_value)
+      |> result.map(fn(port) { Args(..props, port: port) })
+      |> result.try(fn(new_props) { arg_parser_loop(rest, new_props) })
+    }
+    ["--replicaof", master_host, master_port_value, ..rest] -> {
+      int.parse(master_port_value)
+      |> result.map(fn(master_port) {
+        Args(..props, role: ReplicaOf(host: master_host, port: master_port))
       })
-    })
-
-  parser
+      |> result.try(fn(new_props) { arg_parser_loop(rest, new_props) })
+    }
+    _ -> Ok(props)
+  }
 }
 
 type Context {
-  Context(table: ets.Set(BitArray, TableValue))
+  Context(table: ets.Set(BitArray, TableValue), role: Role)
 }
 
 type State {
@@ -51,24 +56,21 @@ type State {
 }
 
 pub fn main() {
-  let assert Ok(args) =
-    arg_parser()
-    |> sheen.run(argv.load().arguments)
+  let assert Ok(args) = arg_parser()
 
   let initial_state =
-    Default(Context(table: ets.new(atom.create_from_string("redis"))))
-
-  let port =
-    args.port
-    |> option.unwrap(6379)
+    Default(Context(
+      table: ets.new(atom.create_from_string("redis")),
+      role: args.role,
+    ))
 
   let assert Ok(_) =
     glisten.handler(fn(_conn) { #(initial_state, None) }, handle_message)
-    |> glisten.serve(port)
+    |> glisten.serve(args.port)
 
   io.println(
     "Running on port: "
-    <> port
+    <> args.port
     |> int.to_string,
   )
   process.sleep_forever()
@@ -230,7 +232,9 @@ type TableValue {
 fn handle_command(cmd, ctx: Context) {
   case cmd {
     Ping -> Ok(resp.SimpleString("PONG"))
+
     Echo(value) -> Ok(resp.BulkString(value))
+
     Set(key, value, px) -> {
       let expiry =
         px
@@ -240,6 +244,7 @@ fn handle_command(cmd, ctx: Context) {
       ets.insert(ctx.table, key, TableValue(content: value, expiry: expiry))
       Ok(resp.SimpleString("OK"))
     }
+
     Get(key) -> {
       Ok(
         ets.lookup(ctx.table, key)
@@ -261,7 +266,12 @@ fn handle_command(cmd, ctx: Context) {
     }
 
     Info("all") | Info("replication") ->
-      Ok(resp.BulkString(<<"role:master":utf8>>))
+      Ok(
+        resp.BulkString(case ctx.role {
+          ReplicaOf(_, _) -> <<"role:slave":utf8>>
+          Master -> <<"role:master":utf8>>
+        }),
+      )
     Info(_) -> Ok(resp.BulkString(<<>>))
   }
 }
