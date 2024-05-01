@@ -15,6 +15,32 @@ import gleam/string
 import glisten.{Packet}
 import redis/ets
 import resp
+import sheen
+import sheen/named
+
+type Args {
+  Args(port: Option(Int))
+}
+
+fn arg_parser() -> sheen.Parser(Args) {
+  let assert Ok(parser) =
+    sheen.new()
+    |> sheen.name("redis-gleam")
+    |> sheen.build({
+      use port <-
+        named.new("port")
+        |> named.integer()
+        |> named.optional()
+
+      sheen.return({
+        use port <- port
+
+        sheen.valid(Args(port: port))
+      })
+    })
+
+  parser
+}
 
 type Context {
   Context(table: ets.Set(BitArray, TableValue))
@@ -25,21 +51,26 @@ type State {
 }
 
 pub fn main() {
-  let port =
-    case argv.load().arguments {
-      ["--port", port] -> port
-      _ -> "6379"
-    }
-    |> int.parse
-    |> result.unwrap(6379)
+  let assert Ok(args) =
+    arg_parser()
+    |> sheen.run(argv.load().arguments)
 
   let initial_state =
     Default(Context(table: ets.new(atom.create_from_string("redis"))))
+
+  let port =
+    args.port
+    |> option.unwrap(6379)
 
   let assert Ok(_) =
     glisten.handler(fn(_conn) { #(initial_state, None) }, handle_message)
     |> glisten.serve(port)
 
+  io.println(
+    "Running on port: "
+    <> port
+    |> int.to_string,
+  )
   process.sleep_forever()
 }
 
