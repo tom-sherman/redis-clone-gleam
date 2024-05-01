@@ -18,7 +18,7 @@ import resp
 
 type Role {
   ReplicaOf(host: String, port: Int)
-  Master
+  Master(id: String, offset: Int)
 }
 
 type Args {
@@ -26,7 +26,13 @@ type Args {
 }
 
 fn arg_parser() -> Result(Args, Nil) {
-  arg_parser_loop(argv.load().arguments, Args(port: 6379, role: Master))
+  arg_parser_loop(
+    argv.load().arguments,
+    Args(
+      port: 6379,
+      role: Master(id: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", offset: 0),
+    ),
+  )
 }
 
 fn arg_parser_loop(args: List(String), props: Args) -> Result(Args, Nil) {
@@ -269,7 +275,16 @@ fn handle_command(cmd, ctx: Context) {
       Ok(
         resp.BulkString(case ctx.role {
           ReplicaOf(_, _) -> <<"role:slave":utf8>>
-          Master -> <<"role:master":utf8>>
+          Master(id, offset) ->
+            bit_array.from_string(
+              "role:master"
+              <> "\n"
+              <> "master_replid:"
+              <> id
+              <> "\n"
+              <> "master_repl_offset:"
+              <> int.to_string(offset),
+            )
         }),
       )
     Info(_) -> Ok(resp.BulkString(<<>>))
