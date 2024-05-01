@@ -73,19 +73,29 @@ pub fn main() {
 
     ReplicaOf(host, port) -> {
       // Replication handshake
+      io.println(
+        "Connecting to master: "
+        <> host
+        <> ":"
+        <> port
+        |> int.to_string,
+      )
       let assert Ok(socket) =
         mug.new(host, port)
         |> mug.connect()
+      io.println("Connected to master")
 
       let assert Ok(_) =
         resp.Array([resp.BulkString(<<"PING":utf8>>)])
         |> resp.to_bit_array
         |> mug.send(socket, _)
+      io.println("Sent PING")
 
       let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
       let assert Ok(resp.SimpleString("PONG")) =
         packet
         |> resp.from_bit_array
+      io.println("Received PONG")
 
       let assert Ok(_) =
         resp.Array([
@@ -99,11 +109,13 @@ pub fn main() {
         ])
         |> resp.to_bit_array
         |> mug.send(socket, _)
+      io.println("Sent REPLCONF listening-port")
 
       let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
       let assert Ok(resp.SimpleString("OK")) =
         packet
         |> resp.from_bit_array
+      io.println("Received first OK")
 
       let assert Ok(_) =
         resp.Array([
@@ -113,11 +125,13 @@ pub fn main() {
         ])
         |> resp.to_bit_array
         |> mug.send(socket, _)
+      io.println("Sent REPLCONF capa")
 
       let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
       let assert Ok(resp.SimpleString("OK")) =
         packet
         |> resp.from_bit_array
+      io.println("Received second OK")
 
       Default(ctx)
     }
