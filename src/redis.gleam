@@ -17,6 +17,7 @@ import mug
 import redis/command
 import redis/ets
 import redis/resp
+import snag
 
 type Role {
   ReplicaOf(host: String, port: Int)
@@ -79,9 +80,12 @@ pub fn main() {
           master_port: port,
           port: args.port,
         )
+        |> snag.context("Failed to handshake with master")
       {
         Ok(_) -> Nil
-        Error(_) -> panic as "Failed to handshake with master"
+        Error(e) -> {
+          panic as snag.pretty_print(e)
+        }
       }
 
       Default(ctx)
@@ -104,19 +108,23 @@ fn replication_handshake(
   master_host master_host,
   master_port master_port,
   port port,
-) -> Result(Nil, Nil) {
+) -> snag.Result(Nil) {
   use socket <- result.try(
     mug.new(master_host, master_port)
     |> mug.connect()
-    |> result.nil_error,
+    |> result.map_error(fn(_) { snag.new("Failed to connect to master") }),
   )
 
   use response <- result.try(
     resp.Array([resp.BulkString(<<"PING":utf8>>)])
-    |> fetch_value(socket),
+    |> fetch_value(socket)
+    |> snag.context("Failed to send PING to master"),
   )
 
-  use <- guard(when: response != resp.SimpleString("PONG"), return: Error(Nil))
+  use <- guard(
+    when: response != resp.SimpleString("PONG"),
+    return: snag.error("Unexpected response from ping"),
+  )
 
   use response <- result.try(
     resp.Array([
@@ -128,10 +136,14 @@ fn replication_handshake(
         |> bit_array.from_string,
       ),
     ])
-    |> fetch_value(socket),
+    |> fetch_value(socket)
+    |> snag.context("Failed to send first REPLCONF to master"),
   )
 
-  use <- guard(when: response != resp.SimpleString("OK"), return: Error(Nil))
+  use <- guard(
+    when: response != resp.SimpleString("OK"),
+    return: snag.error("Failed to set listening port"),
+  )
 
   use response <- result.try(
     resp.Array([
@@ -139,10 +151,14 @@ fn replication_handshake(
       resp.BulkString(<<"capa":utf8>>),
       resp.BulkString(<<"psync2":utf8>>),
     ])
-    |> fetch_value(socket),
+    |> fetch_value(socket)
+    |> snag.context("Failed to send second REPLCONF to master"),
   )
 
-  use <- guard(when: response != resp.SimpleString("OK"), return: Error(Nil))
+  use <- guard(
+    when: response != resp.SimpleString("OK"),
+    return: snag.error("Failed to set capa"),
+  )
 
   use _ <- result.try(
     resp.Array([
@@ -150,7 +166,8 @@ fn replication_handshake(
       resp.BulkString(<<"?":utf8>>),
       resp.BulkString(<<"-1":utf8>>),
     ])
-    |> fetch_value(socket),
+    |> fetch_value(socket)
+    |> snag.context("Failed to send PSYNC to master"),
   )
 
   Ok(Nil)
@@ -161,16 +178,16 @@ fn fetch_value(value, socket) {
     value
     |> resp.to_bit_array
     |> mug.send(socket, _)
-    |> result.nil_error,
+    |> result.map_error(fn(_) { snag.new("Couldn't send value") }),
   )
 
   use packet <- result.try(
     mug.receive(socket, timeout_milliseconds: 500)
-    |> result.nil_error,
+    |> result.map_error(fn(_) { snag.new("Couldn't receive value") }),
   )
 
   resp.from_bit_array(packet)
-  |> result.nil_error
+  |> result.map_error(fn(_) { snag.new("Couldn't conver to resp.Value") })
 }
 
 fn handle_message(msg, state: State, conn) {

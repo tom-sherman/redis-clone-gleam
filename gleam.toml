@@ -20,6 +20,7 @@ glisten = "~> 2.0"
 birl = ">= 1.6.1 and < 2.0.0"
 argv = ">= 1.0.2 and < 2.0.0"
 mug = ">= 1.0.0 and < 2.0.0"
+snag = ">= 0.3.0 and < 1.0.0"
 
 [dev-dependencies]
 gleeunit = "~> 1.0"
