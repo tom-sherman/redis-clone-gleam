@@ -71,17 +71,11 @@ pub fn main() {
   let initial_state = case args.role {
     Master(_, _) -> Default(ctx)
 
-    ReplicaOf(host, port) -> {
+    ReplicaOf(master_host, master_port) -> {
       // Replication handshake
-      io.println(
-        "Connecting to master: "
-        <> host
-        <> ":"
-        <> port
-        |> int.to_string,
-      )
+
       let assert Ok(socket) =
-        mug.new(host, port)
+        mug.new(master_host, master_port)
         |> mug.connect()
       io.println("Connected to master")
 
@@ -102,7 +96,7 @@ pub fn main() {
           resp.BulkString(<<"REPLCONF":utf8>>),
           resp.BulkString(<<"listening-port":utf8>>),
           resp.BulkString(
-            port
+            args.port
             |> int.to_string
             |> bit_array.from_string,
           ),
