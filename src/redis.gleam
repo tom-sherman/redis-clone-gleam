@@ -87,6 +87,38 @@ pub fn main() {
         packet
         |> resp.from_bit_array
 
+      let assert Ok(_) =
+        resp.Array([
+          resp.BulkString(<<"REPLCONF":utf8>>),
+          resp.BulkString(<<"listening-port":utf8>>),
+          resp.BulkString(
+            port
+            |> int.to_string
+            |> bit_array.from_string,
+          ),
+        ])
+        |> resp.to_bit_array
+        |> mug.send(socket, _)
+
+      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
+      let assert Ok(resp.SimpleString("OK")) =
+        packet
+        |> resp.from_bit_array
+
+      let assert Ok(_) =
+        resp.Array([
+          resp.BulkString(<<"REPLCONF":utf8>>),
+          resp.BulkString(<<"capa":utf8>>),
+          resp.BulkString(<<"psync2":utf8>>),
+        ])
+        |> resp.to_bit_array
+        |> mug.send(socket, _)
+
+      let assert Ok(packet) = mug.receive(socket, timeout_milliseconds: 500)
+      let assert Ok(resp.SimpleString("OK")) =
+        packet
+        |> resp.from_bit_array
+
       Default(ctx)
     }
   }
@@ -130,12 +162,18 @@ fn unwrap_or_else(result, f) {
   }
 }
 
+type ReplconfArgs {
+  ListeningPort(Int)
+  Capa(String)
+}
+
 type Command {
   Ping
   Echo(BitArray)
   Set(key: BitArray, value: BitArray, px: Option(Int))
   Get(key: BitArray)
   Info(section: String)
+  Replconf(args: ReplconfArgs)
 }
 
 fn parse_command(value) {
@@ -241,6 +279,33 @@ fn parse_command(value) {
               ))
           }
 
+        "REPLCONF" ->
+          case args {
+            [resp.BulkString(arg1), resp.BulkString(arg2)] ->
+              {
+                use arg1 <- result.try(bit_array.to_string(arg1))
+                use arg2 <- result.try(bit_array.to_string(arg2))
+                case arg1 {
+                  "listening-port" -> {
+                    use port <- result.try(int.parse(arg2))
+                    Ok(Replconf(ListeningPort(port)))
+                  }
+
+                  "capa" -> Ok(Replconf(Capa(arg2)))
+
+                  _ -> Error(Nil)
+                }
+              }
+              |> result.map_error(fn(_) {
+                resp.SimpleError("ERR invalid argument")
+              })
+
+            _ ->
+              Error(resp.SimpleError(
+                "ERR wrong number of arguments for 'replconf' command",
+              ))
+          }
+
         _ ->
           Error(resp.SimpleError(
             "ERR unknown command name: " <> string.uppercase(command_name),
@@ -309,5 +374,11 @@ fn handle_command(cmd, ctx: Context) {
         }),
       )
     Info(_) -> Ok(resp.BulkString(<<>>))
+
+    Replconf(args) ->
+      case args {
+        ListeningPort(_) -> Ok(resp.SimpleString("OK"))
+        Capa(_) -> Ok(resp.SimpleString("OK"))
+      }
   }
 }
