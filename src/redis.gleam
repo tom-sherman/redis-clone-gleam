@@ -140,6 +140,15 @@ fn replication_handshake(
 
   use <- guard(when: response != resp.SimpleString("OK"), return: Error(Nil))
 
+  use _ <- result.try(
+    resp.Array([
+      resp.BulkString(<<"PSYNC":utf8>>),
+      resp.BulkString(<<"?":utf8>>),
+      resp.BulkString(<<"-1":utf8>>),
+    ])
+    |> fetch_value(socket),
+  )
+
   Ok(Nil)
 }
 
@@ -248,5 +257,11 @@ fn handle_command(cmd, ctx: Context) {
     command.Info(_) -> Ok(resp.BulkString(<<>>))
 
     command.Replconf(_) -> Ok(resp.SimpleString("OK"))
+
+    command.Psync(_, _) ->
+      case ctx.role {
+        ReplicaOf(_, _) -> Error(resp.SimpleError("ERR No slave replication"))
+        Master(id, _) -> Ok(resp.SimpleString("FULLRESYNC " <> id <> " 0"))
+      }
   }
 }

@@ -17,6 +17,7 @@ pub type Command {
   Get(key: BitArray)
   Info(section: String)
   Replconf(args: ReplconfArgs)
+  Psync(replication_id: String, offset: Int)
 }
 
 pub fn parse_command(value) {
