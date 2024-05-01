@@ -84,7 +84,7 @@ pub fn main() {
       {
         Ok(_) -> Nil
         Error(e) -> {
-          panic as snag.pretty_print(e)
+          panic as snag.line_print(e)
         }
       }
 
@@ -187,7 +187,13 @@ fn fetch_value(value, socket) {
   )
 
   resp.from_bit_array(packet)
-  |> result.map_error(fn(_) { snag.new("Couldn't conver to resp.Value") })
+  |> result.map_error(fn(_) {
+    snag.new(
+      "Couldn't convert to resp.Value: "
+      <> packet
+      |> bit_array.inspect,
+    )
+  })
 }
 
 fn handle_message(msg, state: State, conn) {
