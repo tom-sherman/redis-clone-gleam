@@ -191,7 +191,11 @@ fn fetch_value(value, socket) {
     snag.new(
       "Couldn't convert to resp.Value: "
       <> packet
-      |> bit_array.inspect,
+      |> bit_array.to_string
+      |> result.unwrap(
+        packet
+        |> bit_array.inspect,
+      ),
     )
   })
 }
