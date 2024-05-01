@@ -247,10 +247,6 @@ fn handle_command(cmd, ctx: Context) {
       )
     command.Info(_) -> Ok(resp.BulkString(<<>>))
 
-    command.Replconf(args) ->
-      case args {
-        command.ListeningPort(_) -> Ok(resp.SimpleString("OK"))
-        command.Capa(_) -> Ok(resp.SimpleString("OK"))
-      }
+    command.Replconf(_) -> Ok(resp.SimpleString("OK"))
   }
 }
